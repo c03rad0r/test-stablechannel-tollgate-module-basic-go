@@ -16,8 +16,42 @@ import (
 	"github.com/OpenTollgate/tip01/modules"
 )
 
-var tollgateMerchantPubkey string = "c1f4c025e746fd307203ac3d1a1886e343bea76ceec5e286c96fb353be6cadea"
-var tollgateDetails string = "{\n  \"id\": \"dacb1643bc64a4d58732c2c4cc3a81e5b85320953cb3cd5daf3331cd6b163e96\",\n  \"pubkey\": \"714161f55b3198b6f95f1d23ca9ee8132052574f7785fcc859cb1f3cf2a2cf5f\",\n  \"created_at\": 1742065776,\n  \"kind\": 21021,\n  \"tags\": [\n    [\n      \"allocation_type\",\n      \"sec\"\n    ],\n    [\n      \"allocation_per_1024\",\n      \"2048\"\n    ],\n    [\n      \"mint\",\n      \"https://testnut.cashu.space\",\n      \"sat\"\n    ]\n  ],\n  \"content\": \"\",\n  \"sig\": \"cbd66538a7911e76b5132df6a2d3886811cb54a8e4cec6c45fcbb13f0bc94f86ae89b3ab2998bb8dc4455355546b27e301f7397fd5afe9956a0ebf282ac30b3e\"\n}"
+// Private key for signing the nostr event (in hex format)
+// In production, this should be kept secure and not hardcoded
+var tollgatePrivateKey string = "8a45d0add1c7ddf668f9818df550edfa907ae8ea59d6581a4ca07473d468d663"
+
+var pricePerMinute int = 5
+
+var tollgateDetailsEvent nostr.Event
+var tollgateDetailsString string
+
+func init() {
+	// Create the nostr event
+	tollgateDetailsEvent = nostr.Event{
+		Kind: 21021,
+		Tags: nostr.Tags{
+			{"metric", "milliseconds"},
+			{"step_size", "60000"},
+			{"price_per_step", fmt.Sprintf("%d", pricePerMinute), "sat"},
+			{"mint", "https://testnut.cashu.space"},
+			{"tips", "1", "2", "3"},
+		},
+		Content: "",
+	}
+
+	// Override the existing signature with a newly generated one
+	err := tollgateDetailsEvent.Sign(tollgatePrivateKey)
+	if err != nil {
+		log.Fatalf("Failed to sign tollgate event: %v", err)
+	}
+
+	// Convert to JSON string for storage
+	detailsBytes, err := json.Marshal(tollgateDetailsEvent)
+	if err != nil {
+		log.Fatalf("Failed to marshal tollgate event: %v", err)
+	}
+	tollgateDetailsString = string(detailsBytes)
+}
 
 func getMacAddress(ipAddress string) (string, error) {
 	cmdIn := `cat /tmp/dhcp.leases | cut -f 2,3,4 -s -d" " | grep -i ` + ipAddress + ` | cut -f 1 -s -d" "`
@@ -69,7 +103,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func handleDetails(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Details requested")
-	fmt.Fprintf(w, tollgateDetails)
+	fmt.Fprintf(w, tollgateDetailsString)
 }
 
 // handleRootPost handles POST requests to the root endpoint
@@ -156,16 +190,18 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Cashu token value: %d sats", tokenValue)
+	log.Printf("Successfully swapped Cashu token worth %d sats", tokenValue)
 
-	// Calculate duration based on token value (1 minute per sat)
-	duration := int64(tokenValue * 60) // convert to seconds
-	if duration < 60 {
-		duration = 60 // minimum 1 minute
+	var allottedMinutes = tokenValue / pricePerMinute
+
+	// Calculate durationSeconds based on token value (1 minute per sat)
+	durationSeconds := int64(allottedMinutes * 60) // convert to seconds
+	if durationSeconds < 60 {
+		durationSeconds = 60 // minimum 1 minute
 	}
 
 	// Open gate for the specified duration using the valve module
-	err = modules.OpenGate(macAddress, duration)
+	err = modules.OpenGate(macAddress, durationSeconds)
 	if err != nil {
 		log.Printf("Error opening gate: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -174,7 +210,7 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 
 	// Return a success status with token info
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Access granted for %d minutes", duration/60)
+	fmt.Fprintf(w, "Access granted for %d minutes", durationSeconds/60)
 }
 
 // decodeCashuToken decodes a Cashu token and returns the total value in sats
