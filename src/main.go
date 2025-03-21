@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elnosh/gonuts/cashu"
 	"github.com/nbd-wtf/go-nostr"
 
 	"github.com/OpenTollgate/tip01/modules"
@@ -24,6 +24,9 @@ var pricePerMinute int = 5
 
 var tollgateDetailsEvent nostr.Event
 var tollgateDetailsString string
+
+// Initialize the nostr pool for Cashu operations
+var relayPool *nostr.SimplePool
 
 func init() {
 	// Create the nostr event
@@ -51,6 +54,9 @@ func init() {
 		log.Fatalf("Failed to marshal tollgate event: %v", err)
 	}
 	tollgateDetailsString = string(detailsBytes)
+
+	// Initialize relay pool for NIP-60 operations
+	relayPool = nostr.NewSimplePool(context.Background())
 }
 
 func getMacAddress(ipAddress string) (string, error) {
@@ -182,7 +188,7 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Extracted MAC address: %s", macAddress)
 	log.Printf("Extracted payment token: %s", paymentToken)
 
-	// Decode the Cashu token using gonuts
+	// Decode the Cashu token
 	tokenValue, err := decodeCashuToken(paymentToken)
 	if err != nil {
 		log.Printf("Error decoding Cashu token: %v", err)
@@ -190,7 +196,19 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Successfully swapped Cashu token worth %d sats", tokenValue)
+	// Process and swap the token for fresh proofs
+	freshProofs, freshToken, err := SwapTokenForFreshProofs(paymentToken, tollgatePrivateKey, relayPool)
+	if err != nil {
+		log.Printf("Error swapping token: %v", err)
+		w.WriteHeader(http.StatusPaymentRequired)
+		return
+		// We can still continue with the token we have
+	} else {
+		log.Printf("Successfully swapped token for fresh proofs, new token: %s", freshToken)
+	}
+
+	log.Printf("Fresh proofs: %v", freshProofs)
+	log.Printf("Fresh token: %s", freshToken)
 
 	var allottedMinutes = tokenValue / pricePerMinute
 
@@ -211,35 +229,6 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 	// Return a success status with token info
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Access granted for %d minutes", durationSeconds/60)
-}
-
-// decodeCashuToken decodes a Cashu token and returns the total value in sats
-func decodeCashuToken(token string) (int, error) {
-	fmt.Println("Decoding Cashu token:", token)
-
-	// Only support cashuB tokens
-	if !strings.HasPrefix(strings.ToLower(token), "cashub") {
-		return 0, fmt.Errorf("only cashuB tokens are supported")
-	}
-
-	// Remove the "cashuB" prefix
-	// token = token[6:]
-
-	// Log the token length for debugging
-	log.Printf("Attempting to decode cashuB token of length: %d", len(token))
-
-	// Try V4 specific decode - cashuB tokens use this format
-	v4Token, err := cashu.DecodeTokenV4(token)
-	if err != nil {
-		log.Printf("Failed to decode cashuB token: %v", err)
-		return 0, fmt.Errorf("error decoding cashuB token: %w", err)
-	}
-
-	// Get the amount directly from the token
-	amount := int(v4Token.Amount())
-	log.Printf("Successfully decoded cashuB token with amount: %d sats", amount)
-
-	return amount, nil
 }
 
 // handleRoot routes requests based on method
