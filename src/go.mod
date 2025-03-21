@@ -4,7 +4,7 @@ go 1.23.3
 
 require github.com/nbd-wtf/go-nostr v0.51.3
 
-require github.com/elnosh/gonuts v0.3.1-0.20250123162555-7c0381a585e3
+require github.com/elnosh/gonuts v0.3.1-0.20250123162555-7c0381a585e3 // indirect
 
 require (
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect

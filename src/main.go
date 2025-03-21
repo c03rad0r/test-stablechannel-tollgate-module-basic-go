@@ -19,7 +19,7 @@ import (
 // Private key for signing the nostr event (in hex format)
 // In production, this should be kept secure and not hardcoded
 var tollgatePrivateKey string = "8a45d0add1c7ddf668f9818df550edfa907ae8ea59d6581a4ca07473d468d663"
-
+var acceptedMint = "https://mint.minibits.cash/Bitcoin"
 var pricePerMinute int = 5
 
 var tollgateDetailsEvent nostr.Event
@@ -36,7 +36,7 @@ func init() {
 			{"metric", "milliseconds"},
 			{"step_size", "60000"},
 			{"price_per_step", fmt.Sprintf("%d", pricePerMinute), "sat"},
-			{"mint", "https://testnut.cashu.space"},
+			{"mint", acceptedMint},
 			{"tips", "1", "2", "3"},
 		},
 		Content: "",
@@ -197,18 +197,15 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process and swap the token for fresh proofs
-	freshProofs, freshToken, err := SwapTokenForFreshProofs(paymentToken, tollgatePrivateKey, relayPool)
-	if err != nil {
-		log.Printf("Error swapping token: %v", err)
+	swapError := CollectPayment(paymentToken, tollgatePrivateKey, relayPool)
+	if swapError != nil {
+		log.Printf("Error swapping token: %v", swapError)
 		w.WriteHeader(http.StatusPaymentRequired)
 		return
 		// We can still continue with the token we have
 	} else {
-		log.Printf("Successfully swapped token for fresh proofs, new token: %s", freshToken)
+		log.Printf("Successfully swapped token for fresh proofs")
 	}
-
-	log.Printf("Fresh proofs: %v", freshProofs)
-	log.Printf("Fresh token: %s", freshToken)
 
 	var allottedMinutes = tokenValue / pricePerMinute
 

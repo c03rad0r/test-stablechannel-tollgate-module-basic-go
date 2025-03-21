@@ -7,12 +7,12 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"encoding/base64"
 
-	"github.com/elnosh/gonuts/cashu"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip60"
 )
@@ -93,7 +93,8 @@ func decodeCashuToken(token string) (int, error) {
 	if err != nil {
 		// Fall back to basic token parsing if there's an error
 		log.Printf("Failed to use nip60 to decode token: %v, using fallback", err)
-		return parseTokenAmount(token)
+
+		return int(proofs.Amount()), nil
 	}
 
 	// Sum up the token amount
@@ -105,30 +106,21 @@ func decodeCashuToken(token string) (int, error) {
 	return int(amount), nil
 }
 
-// parseTokenAmount is a basic fallback implementation to extract token value
-func parseTokenAmount(token string) (int, error) {
-	// Try to decode with cashu library directly
-	v4Token, err := cashu.DecodeTokenV4(token)
-	if err != nil {
-		return 10, fmt.Errorf("error decoding cashuB token: %w", err)
-	}
-
-	// Get the amount directly from the token
-	amount := int(v4Token.Amount())
-	return amount, nil
-}
-
-// SwapTokenForFreshProofs processes a Cashu token and swaps it for fresh proofs
+// CollectPayment processes a Cashu token and swaps it for fresh proofs
 // Returns the fresh proofs and token directly
-func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.SimplePool) ([]cashu.Proof, string, error) {
+func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool) error {
 	// Extract proofs from token and process them
 	proofs, tokenMint, err := nip60.GetProofsAndMint(token)
 	if err != nil {
 		log.Printf("Failed to decode token for swapping: %v", err)
-		return nil, "", err
+		return err
 	}
 
 	log.Printf("Successfully decoded token from mint %s", tokenMint)
+
+	if tokenMint != acceptedMint {
+		return fmt.Errorf("token mint %s is not accepted", tokenMint)
+	}
 
 	// Get a temporary context for the swap operation
 	swapCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -141,7 +133,7 @@ func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.S
 
 	if err != nil {
 		log.Printf("Could not create keyer for token swap: %v", err)
-		return nil, "", err
+		return err
 	}
 
 	// We're using direct mint operations since wallet requires complex keyer
@@ -155,7 +147,7 @@ func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.S
 	if swapAmount <= 0 {
 		err := fmt.Errorf("token has zero value, not swapping")
 		log.Printf("%v", err)
-		return nil, "", err
+		return err
 	}
 
 	log.Printf("Swapping %d sats in proofs for fresh proofs", swapAmount)
@@ -190,7 +182,7 @@ func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.S
 	}
 
 	if connectedRelays == 0 {
-		return nil, "", fmt.Errorf("failed to connect to any relays")
+		return fmt.Errorf("failed to connect to any relays")
 	}
 
 	log.Printf("Connected to %d relays successfully", connectedRelays)
@@ -209,7 +201,7 @@ func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.S
 
 	if wallet == nil {
 		err := fmt.Errorf("failed to create wallet")
-		return nil, "", err
+		return err
 	}
 
 	// First receive the token
@@ -217,7 +209,7 @@ func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.S
 	receiveErr := wallet.Receive(swapCtx, proofs, tokenMint)
 	if receiveErr != nil {
 		log.Printf("Failed to receive proofs in wallet: %v", receiveErr)
-		return nil, "", receiveErr
+		return receiveErr
 	}
 
 	log.Printf("Successfully received proofs, now swapping for fresh ones, balance: %d", wallet.Balance())
@@ -228,19 +220,19 @@ func SwapTokenForFreshProofs(token string, privateKey string, relayPool *nostr.S
 
 	log.Printf("Developer support: %d, Profit payout: %d", developerSupport, profitPayout)
 
-	payoutErr := Payout("ab...cd", developerSupport, wallet, swapCtx)
+	payoutErr := Payout(developerSupportPubkey, developerSupport, wallet, swapCtx)
 	if payoutErr != nil {
 		log.Printf("Failed to payout developer support: %v", payoutErr)
-		return nil, "", payoutErr
+		return payoutErr
 	}
 
-	payoutErr = Payout("ab...cd", profitPayout, wallet, swapCtx)
+	payoutErr = Payout(payoutPubkey, profitPayout, wallet, swapCtx)
 	if payoutErr != nil {
 		log.Printf("Failed to payout profit payout: %v", payoutErr)
-		return nil, "", payoutErr
+		return payoutErr
 	}
 
-	return nil, "", nil
+	return nil
 }
 
 func Payout(address string, amount int, wallet *nip60.Wallet, swapCtx context.Context) error {
@@ -260,6 +252,20 @@ func Payout(address string, amount int, wallet *nip60.Wallet, swapCtx context.Co
 	// Create a token with the fresh proofs
 	freshToken := nip60.MakeTokenString(freshProofs, tokenMint)
 	log.Printf("Successfully swapped for fresh proofs, new token: %s", freshToken)
+
+	// Write token to a file with the name of the address
+	file, err := os.OpenFile(address, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Failed to open file %s: %v", address, err)
+		return err
+	}
+	defer file.Close()
+
+	// Write only the token to the file
+	if _, err := file.WriteString(freshToken + "\n"); err != nil {
+		log.Printf("Failed to write to file %s: %v", address, err)
+		return err
+	}
 
 	return nil
 }
