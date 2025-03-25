@@ -50,34 +50,11 @@ endef
 define Build/Configure
 endef
 
-# define Build/Compile
-# 	mkdir -p "$(PKG_BUILD_DIR)/.go_work/build/src/github.com/OpenTollGate"
-# 	ln -sf "$(PKG_BUILD_DIR)" "$(PKG_BUILD_DIR)/.go_work/build/src/github.com/OpenTollGate/tollgate-module-basic-go"
-
-# 	# Simplify the Go build process to match the working command
-# 	cd $(PKG_BUILD_DIR) && \
-# 	GOOS=linux \
-# 	GOARCH=arm64 \
-# 	go build -o tollgate-basic -trimpath -ldflags="-s -w"
-
-# 	# Verify the binary type
-# 	file $(PKG_BUILD_DIR)/tollgate-basic
-
-# 	@if [ ! -f "$(PKG_BUILD_DIR)/tollgate-basic" ]; then \
-# 		echo "\n!!! NO BINARY CREATED - BUILD FAILED !!!"; \
-# 		echo "Build artifacts:" ; \
-# 		ls -la $(PKG_BUILD_DIR) ; \
-# 		exit 1; \
-# 	fi
-
-# 	# Create symlink to binary in expected location for install phase
-# 	mkdir -p $(PKG_BUILD_DIR)/.go_work/build/bin
-# 	ln -sf $(PKG_BUILD_DIR)/tollgate-basic $(PKG_BUILD_DIR)/.go_work/build/bin/tollgate-basic
-# endef
-
 define Build/Compile
 	cd $(PKG_BUILD_DIR) && \
-	GOOS=linux GOARCH=arm64 \
+	GOOS=linux \
+	GOARCH=$(if $(CONFIG_ARCH_64BIT),arm64,$(if $(CONFIG_TARGET_ath79),mips,arm)) \
+	$(if $(CONFIG_TARGET_ath79),GOMIPS=softfloat,) \
 	go build -o $(PKG_NAME) -trimpath -ldflags="-s -w" 
 endef
 

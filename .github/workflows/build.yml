@@ -27,10 +27,48 @@ jobs:
     strategy:
       matrix:
         target: [
-          #{name: "ath79-nor", goarch: "mips", gomips: "softfloat", model: "gl-ar300m16", platform: "ath79", subtarget: "generic", profile: "glinet_gl-ar300m16"},
-          #{name: "ath79-nand", goarch: "mips", gomips: "softfloat", model: "gl-ar300m-nor", platform: "ath79", subtarget: "generic", profile: "glinet_gl-ar300m-nor"},
-          {name: "glmt3000", goarch: "arm64", model: "gl-mt3000", platform: "mediatek", subtarget: "filogic", arch: "aarch64_cortex-a53"}#,
-          #{name: "glmt6000", goarch: "arm64", model: "gl-mt6000", platform: "mediatek", subtarget: "filogic"}
+          {
+            name: "ath79-nor",
+            goarch: "mips",
+            gomips: "softfloat",
+            model: "gl-ar300m16",
+            platform: "ath79",
+            subtarget: "generic",
+            profile: "glinet_gl-ar300m16-nor",
+            arch: "mips_24kc",
+            device: "glinet,gl-ar300m16-nor",
+            rootfs_size: "16384k",
+            kernel_size: "2048k"
+          },
+          {
+            name: "ath79-nand", 
+            goarch: "mips", 
+            gomips: "softfloat", 
+            model: "gl-ar300m", 
+            platform: "ath79", 
+            subtarget: "generic", 
+            profile: "glinet_gl-ar300m",
+            arch: "mips_24kc",
+            device: "glinet,gl-ar300m"
+          },
+          {
+            name: "glmt3000", 
+            goarch: "arm64", 
+            model: "gl-mt3000", 
+            platform: "mediatek", 
+            subtarget: "filogic", 
+            profile: "glinet_gl-mt3000",
+            arch: "aarch64_cortex-a53"
+          },
+          {
+            name: "glmt6000", 
+            goarch: "arm64", 
+            model: "gl-mt6000", 
+            platform: "mediatek", 
+            subtarget: "filogic",
+            profile: "glinet_gl-mt6000", 
+            arch: "aarch64_cortex-a53"
+          }
         ]
       fail-fast: false
     steps:
@@ -41,8 +79,15 @@ jobs:
         run: |
           echo "MODULE_NAME=${MODULE_NAME:-basic}" >> $GITHUB_ENV
           echo "MODEL=${{ matrix.target.model }}" >> $GITHUB_ENV
-          echo "ARCH=${{ matrix.target.arch }}" >> $GITHUB_ENV
-          echo "PACKAGE_FILENAME=${MODULE_NAME:-basic}-${{ matrix.target.model }}-${{ matrix.target.arch }}.ipk" >> $GITHUB_ENV
+          
+          # Get architecture from matrix or detect using pure shell syntax
+          ARCH_VALUE="${{ matrix.target.arch }}"
+          if [ -z "$ARCH_VALUE" ]; then
+              ARCH_VALUE=$(uname -m)
+          fi
+          
+          echo "ARCH=$ARCH_VALUE" >> $GITHUB_ENV
+          echo "PACKAGE_FILENAME=${MODULE_NAME:-basic}-${{ matrix.target.model }}-${ARCH_VALUE}.ipk" >> $GITHUB_ENV
           echo "PLATFORM=${{ matrix.target.platform }}" >> $GITHUB_ENV
 
       # Download prebuilt golang packages
@@ -73,6 +118,9 @@ jobs:
           subtarget: ${{ matrix.target.subtarget }}
           module: tollgate-module-basic-go
           prebuilt_golang: ${{ steps.find_golang.outputs.golang_ipk }}
+          # device: ${{ matrix.target.device }}
+          # rootfs_size: ${{ matrix.target.rootfs_size }}
+          # kernel_size: ${{ matrix.target.kernel_size }}
 
       - name: Debug output
         run: |
