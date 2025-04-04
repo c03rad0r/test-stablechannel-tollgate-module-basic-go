@@ -1,4 +1,5 @@
 package main
+
 import (
 	"context"
 	"encoding/json"
@@ -10,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/OpenTollgate/tollgate-module-basic-go/src/modules"
+	"github.com/nbd-wtf/go-nostr"
 )
 
 // Private key for signing the nostr event (in hex format)

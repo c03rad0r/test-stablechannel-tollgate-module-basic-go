@@ -1,0 +1,147 @@
+name: Build and Publish
+
+on:
+  push:
+
+## Add global env vars for the whole workflow
+env:
+  PACKAGE_NAME: "tollgate-module-basic-go"
+  ARCHITECTURE: "aaarch64blablabla"
+  GOARCH: "arm64"
+#  DEBUG: "true"
+  # GOMIPS: "softfloat"
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    container:
+      image: openwrt/sdk:mediatek-filogic-23.05.3
+      options: --user root # https://github.com/actions/checkout/issues/1575#issuecomment-2536435128
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          path: ${{ env.PACKAGE_NAME }}/
+
+      - name: Move sources to sdk folder
+        run: |
+          mv ${{ env.PACKAGE_NAME }} /builder/package/${{ env.PACKAGE_NAME }}
+
+      - name: Install Golang
+        run: |
+          # Add golang-backports repository
+          echo "deb https://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list
+          apt-get update
+          
+          # Install Go from backports
+          apt-get install -y -t bookworm-backports golang-go
+
+      - name: Configure SDK
+        run: |
+          cd /builder
+
+          # Generate default configuration
+          make defconfig
+
+          # Update configuration for our needs
+          echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=y" >> .config
+          
+      - name: Compile Package
+        run: |
+          cd /builder
+          env GOARCH=${{ env.GOARCH }} GOMIPS=${{ env.GOMIPS }} make -j$(nproc) package/${{ env.PACKAGE_NAME }}/compile ${{ env.DEBUG == 'true' && 'V=sc' || '' }}
+
+      - name: List output package(s)
+        run: |
+          PACKAGE_PATH=$(find /builder/bin/packages -name "*.ipk" -type f | head -n1)
+          
+          if [ -z "$PACKAGE_PATH" ]; then
+            echo "❌ No .ipk package found in /builder/bin/packages"
+            exit 1
+          fi
+
+          echo "✅ Found package at: $PACKAGE_PATH"
+          echo "PACKAGE_FULLPATH=$PACKAGE_PATH" >> $GITHUB_ENV
+
+          # FILE_SIZE=$(stat -c%s "${{ env.PACKAGE_FULLPATH }}")
+          # echo "PACKAGE_SIZE=$FILE_SIZE" >> $GITHUB_ENV
+
+      - name: GitHub Artifact upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ env.PACKAGE_NAME }}
+          path: ${{ env.PACKAGE_FULLPATH }}
+          retention-days: 5
+
+      - name: Blossom Artifact upload
+        id: blossom_upload
+        uses: Origami74/upload-blossom-action@improve-io
+        with:
+          host: "https://blossom.swissdash.site"
+          filePath: ${{ env.PACKAGE_FULLPATH }}
+     
+      - name: Blossom Artifact upload - Process response
+        run: |
+          echo "Upload outputs:"
+          echo "  URL: ${{ steps.blossom_upload.outputs.url }}"
+          echo "  Hash: ${{ steps.blossom_upload.outputs.hash }}"
+          # echo "  Size: ${{ env.PACKAGE_SIZE }} bytes"
+          
+          echo "PACKAGE_URL=${{ steps.blossom_upload.outputs.url }}" >> $GITHUB_ENV
+          echo "PACKAGE_HASH=${{ steps.blossom_upload.outputs.hash }}" >> $GITHUB_ENV
+          
+          echo "PACKAGE_FILENAME=${{ env.PACKAGE_NAME }}-${{ env.MODEL }}-${{ env.GOARCH }}.ipk" >> $GITHUB_ENV
+
+#      - name: Publish Package NIP-94 Metadata
+#        uses: OpenTollGate/nostr-publish-file-metadata-action/python@main
+#        with:
+#          relays: wss://relay.damus.io,wss://nos.lol,wss://nostr.mom/
+#          url: ${{ env.PACKAGE_URL }}
+#          mimeType: application/x-opkg
+#          fileHash: ${{ env.PACKAGE_HASH }}
+#          originalHash: ${{ env.PACKAGE_HASH }}
+#          filename: "${{ env.PACKAGE_FILENAME }}"
+#          content: |
+#            {
+#              "description": "TollGate ${{ env.PACKAGE_NAME }} OpenWRT package for ${{ env.MODEL }}",
+#              "module": "${{ env.PACKAGE_NAME }}",
+#              "version": "0.0.1"
+#            }
+#          nsec: ${{ secrets.NSEC }}
+#          size: ${{ env.PACKAGE_SIZE }}
+#          architecture: "${{ env.GOARCH }}"
+#
+
+#      - name: Verify Package NIP-94 Event
+#        id: verify_package
+#        if: steps.publish_package.outputs.eventId != ''
+#        uses: OpenTollGate/nostr-publish-file-metadata-action/python/verify@main
+#        with:
+#          eventId: ${{ steps.publish_package.outputs.eventId }}
+#          relays: wss://relay.damus.io,wss://nos.lol,wss://nostr.mom/
+#
+#      # - name: Check Package Publication
+#      #   if: steps.verify_package.outcome != 'success'
+#      #   run: |
+#      #     echo "❌ Failed to verify package publication on relays"
+#      #     exit 1
+#
+#      - name: Build Summary
+#        run: |
+#          echo "Build Summary for ${{ matrix.target.name }}:"
+#          echo "✅ Binary successfully built and published"
+#          echo "✅ Package successfully built and published"
+#          echo "Binary URL: ${{ steps.upload_binary.outputs.blossomUrl }}"
+#          echo "Package URL: ${{ steps.upload_package.outputs.blossomUrl }}"
+#
+#  install-os:
+#    needs: build-package
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Trigger OS Workflow
+#        uses: peter-evans/repository-dispatch@v2
+#        with:
+#          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+#          repository: OpenTollGate/tollgate-os
+#          event-type: update-release-json
+
