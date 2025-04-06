@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -15,11 +16,26 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// Private key for signing the nostr event (in hex format)
-// In production, this should be kept secure and not hardcoded
-var tollgatePrivateKey string = "8a45d0add1c7ddf668f9818df550edfa907ae8ea59d6581a4ca07473d468d663"
-var acceptedMint = "https://mint.minibits.cash/Bitcoin"
-var pricePerMinute int = 5
+// Config structure to hold all configuration parameters
+type Config struct {
+	TollgatePrivateKey string `json:"tollgate_private_key"`
+	AcceptedMint       string `json:"accepted_mint"`
+	PricePerMinute     int    `json:"price_per_minute"`
+	MinPayment         int    `json:"min_payment"`
+	MintFee            int    `json:"mint_fee"`
+	// You can add more parameters here as needed
+}
+
+// Global configuration variable
+var config Config
+
+// Derived configuration values
+var tollgatePrivateKey string
+var acceptedMint string
+var pricePerMinute int
+var minPayment int
+var mintFee int
+var cutoffFee int
 
 var tollgateDetailsEvent nostr.Event
 var tollgateDetailsString string
@@ -28,6 +44,11 @@ var tollgateDetailsString string
 var relayPool *nostr.SimplePool
 
 func init() {
+	// Load configuration
+	if err := loadConfig(); err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
 	// Create the nostr event
 	tollgateDetailsEvent = nostr.Event{
 		Kind: 21021,
@@ -56,6 +77,69 @@ func init() {
 
 	// Initialize relay pool for NIP-60 operations
 	relayPool = nostr.NewSimplePool(context.Background())
+}
+
+// loadConfig reads configuration from /etc/tollgate/config.json
+func loadConfig() error {
+	// Set default values
+	config = Config{
+		TollgatePrivateKey: "8a45d0add1c7ddf668f9818df550edfa907ae8ea59d6581a4ca07473d468d663",
+		AcceptedMint:       "https://testnut.cashu.space",
+		PricePerMinute:     1,
+		MinPayment:         1,
+		MintFee:            1,
+	}
+	
+	// Create the config directory if it doesn't exist
+	configDir := "/etc/tollgate"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		log.Printf("WARNING: Failed to create config directory: %v", err)
+		// Continue with default values
+	}
+	
+	configFile := configDir + "/config.json"
+	
+	// Check if the config file exists
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		// Create a default config file
+		log.Printf("Config file not found, creating default at: %s", configFile)
+		defaultConfig, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal default config: %v", err)
+		}
+		
+		if err := os.WriteFile(configFile, defaultConfig, 0644); err != nil {
+			log.Printf("WARNING: Failed to write default config file: %v", err)
+			// Continue with default values
+		}
+	} else {
+		// Read the existing config file
+		data, err := os.ReadFile(configFile)
+		if err != nil {
+			log.Printf("WARNING: Failed to read config file: %v", err)
+			// Continue with default values
+		} else {
+			// Parse the config file
+			if err := json.Unmarshal(data, &config); err != nil {
+				log.Printf("WARNING: Failed to parse config file: %v", err)
+				// Continue with default values
+			}
+		}
+	}
+	
+	// Update derived values
+	tollgatePrivateKey = config.TollgatePrivateKey
+	acceptedMint = config.AcceptedMint
+	pricePerMinute = config.PricePerMinute
+	minPayment = config.MinPayment
+	mintFee = config.MintFee
+	// first mint fee for the payment and second fee for consolidation transaction
+	cutoffFee = 2*mintFee + minPayment
+	
+	log.Printf("Configuration loaded: mint=%s, price=%d, fee=%d", 
+		acceptedMint, pricePerMinute, mintFee)
+	
+	return nil
 }
 
 func getMacAddress(ipAddress string) (string, error) {
@@ -195,7 +279,15 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process and swap the token for fresh proofs
+	// Verify the token has sufficient value before redeeming it
+	if tokenValue < cutoffFee {
+		log.Printf("Token value too low (%d sats). Minimum %d sats required.", tokenValue, cutoffFee)
+		w.WriteHeader(http.StatusPaymentRequired)
+		fmt.Fprintf(w, "Payment required. Token value too low (%d sats). Minimum %d sats required.", tokenValue, cutoffFee)
+		return
+	}
+
+	// Process and swap the token for fresh proofs - only if value is sufficient
 	swapError := CollectPayment(paymentToken, tollgatePrivateKey, relayPool)
 	if swapError != nil {
 		log.Printf("Error swapping token: %v", swapError)
@@ -206,13 +298,30 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Successfully swapped token for fresh proofs")
 	}
 
-	var allottedMinutes = tokenValue / pricePerMinute
-
-	// Calculate durationSeconds based on token value (1 minute per sat)
-	durationSeconds := int64(allottedMinutes * 60) // convert to seconds
-	if durationSeconds < 60 {
-		durationSeconds = 60 // minimum 1 minute
+	// Calculate the actual value after deducting fees
+	// First mint fee for the payment and second fee for consolidation transaction
+	var valueAfterFees = tokenValue - 2*mintFee
+	if valueAfterFees < minPayment {
+		log.Printf("ValueAfterFees: Token value too low (%d sats). Minimum %d sats required.", valueAfterFees, minPayment)
+		w.WriteHeader(http.StatusPaymentRequired)
+		return // Not enough value to open the gate
+		// This should have been caught by the token value check above
 	}
+
+	// Calculate minutes based on the net value
+	// TODO: Update frontend to show the correct duration after fees
+	//       Already tested to verify that allottedMinutes is correct
+	var allottedMinutes = int64(valueAfterFees / pricePerMinute)
+	if allottedMinutes < 1 {
+		allottedMinutes = 1 // Minimum 1 minute
+	}
+
+	// Convert to seconds for gate opening
+	durationSeconds := int64(allottedMinutes * 60)
+
+	// Log the calculation for transparency
+	log.Printf("Calculated minutes: %d (from value %d, minus fees %d)", 
+		allottedMinutes, tokenValue, 2*mintFee)
 
 	// Open gate for the specified duration using the valve module
 	err = modules.OpenGate(macAddress, durationSeconds)
@@ -224,7 +333,8 @@ func handleRootPost(w http.ResponseWriter, r *http.Request) {
 
 	// Return a success status with token info
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Access granted for %d minutes", durationSeconds/60)
+	fmt.Fprintf(w, "Access granted for %d minutes (payment: %d sats, fees: %d sats)", 
+		allottedMinutes, valueAfterFees, 2*mintFee)
 }
 
 // handleRoot routes requests based on method

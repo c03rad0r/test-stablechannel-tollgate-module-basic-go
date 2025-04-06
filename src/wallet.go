@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +18,7 @@ import (
 
 var payoutPubkey = "bbb5dda0e15567979f0543407bdc2033d6f0bbb30f72512a981cfdb2f09e2747"
 var developerSupportPubkey = "9f4b342eaa7d3e4cc0a1078df9ceda9d4a667edfe3493237b54864b74ee9c9da"
+var CombinedPayout = "CombinedPayout"
 
 func init() {
 	// Configure custom DNS resolver to bypass local DNS issues
@@ -105,6 +105,7 @@ func decodeCashuToken(token string) (int, error) {
 
 	return int(amount), nil
 }
+
 
 // CollectPayment processes a Cashu token and swaps it for fresh proofs
 // Returns the fresh proofs and token directly
@@ -215,18 +216,7 @@ func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool
 	log.Printf("Successfully received proofs, now swapping for fresh ones, balance: %d", wallet.Balance())
 
 	balance := wallet.Balance()
-	developerSupport := int(math.Floor(float64(balance) * 0.30))
-	profitPayout := int(math.Ceil(float64(balance) - float64(developerSupport)))
-
-	log.Printf("Developer support: %d, Profit payout: %d", developerSupport, profitPayout)
-
-	payoutErr := Payout(developerSupportPubkey, developerSupport, wallet, swapCtx)
-	if payoutErr != nil {
-		log.Printf("Failed to payout developer support: %v", payoutErr)
-		return payoutErr
-	}
-
-	payoutErr = Payout(payoutPubkey, profitPayout, wallet, swapCtx)
+	payoutErr := Payout(CombinedPayout, int(balance), wallet, swapCtx)
 	if payoutErr != nil {
 		log.Printf("Failed to payout profit payout: %v", payoutErr)
 		return payoutErr
@@ -237,13 +227,28 @@ func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool
 
 func Payout(address string, amount int, wallet *nip60.Wallet, swapCtx context.Context) error {
 	log.Printf("Paying out %d sats to %s", amount, address)
-
-	extimatedFee := uint64(1)
-
+	
+	// Skip processing if amount is zero
+	if amount <= 0 {
+		log.Printf("Skipping payout of zero amount to %s", address)
+		return nil
+	}
+	
+	extimatedFee := uint64(mintFee)
+	
 	// Then swap for fresh proofs - use SendExternal to send to ourselves
 	freshProofs, tokenMint, swapErr := wallet.Send(swapCtx, uint64(amount)-extimatedFee)
 	if swapErr != nil {
 		log.Printf("Failed to swap proofs: %v", swapErr)
+		if len(freshProofs) == 0 {
+			log.Printf("WARNING: No proofs generated, possibly due to small amount (%d sats)", amount)
+			// Try again without fee
+			freshProofs, tokenMint, swapErr = wallet.Send(swapCtx, uint64(amount))
+			if swapErr != nil || len(freshProofs) == 0 {
+				log.Printf("Failed on retry: %v", swapErr)
+				return fmt.Errorf("failed to generate valid proofs for small amount: %v", swapErr)
+			}
+		}
 		return swapErr
 	}
 
@@ -253,17 +258,46 @@ func Payout(address string, amount int, wallet *nip60.Wallet, swapCtx context.Co
 	freshToken := nip60.MakeTokenString(freshProofs, tokenMint)
 	log.Printf("Successfully swapped for fresh proofs, new token: %s", freshToken)
 
-	// Write token to a file with the name of the address
-	file, err := os.OpenFile(address, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Define a persistent storage directory with debug output
+	storageDir := "/etc/tollgate/ecash"
+	log.Printf("DEBUG: Using storage directory: %s", storageDir)
+	
+	// Log the current working directory
+	cwd, _ := os.Getwd()
+	log.Printf("DEBUG: Current working directory: %s", cwd)
+
+	// Create the storage directory if it doesn't exist
+	if err := os.MkdirAll(storageDir, 0777); err != nil { // Fixed comparison with nil
+	    log.Printf("ERROR: Failed to create storage directory %s: %v", storageDir, err)
+	    return err
+	}
+	log.Printf("DEBUG: Storage directory created/verified")
+
+	// Use an absolute path for the token file
+	tokenPath := fmt.Sprintf("%s/%s", storageDir, address)
+	log.Printf("DEBUG: Will write token to: %s", tokenPath)
+
+	// Write token to a file with more verbose error handling
+	file, err := os.OpenFile(tokenPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
-		log.Printf("Failed to open file %s: %v", address, err)
-		return err
+		log.Printf("ERROR: Failed to open file %s: %v", tokenPath, err)
+		// Try alternative location as fallback
+		fallbackPath := fmt.Sprintf("/%s", address)
+		log.Printf("DEBUG: Trying fallback location: %s", fallbackPath)
+		file, err = os.OpenFile(fallbackPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+		if err != nil {
+			log.Printf("ERROR: Also failed to use fallback location: %v", err)
+			return err
+		}
+		log.Printf("DEBUG: Successfully opened fallback file")
+	} else {
+		log.Printf("DEBUG: Successfully opened file at primary location")
 	}
 	defer file.Close()
 
 	// Write only the token to the file
 	if _, err := file.WriteString(freshToken + "\n"); err != nil {
-		log.Printf("Failed to write to file %s: %v", address, err)
+		log.Printf("Failed to write to file %s: %v", tokenPath, err)
 		return err
 	}
 
