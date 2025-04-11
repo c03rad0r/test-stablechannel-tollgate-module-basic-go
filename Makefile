@@ -37,7 +37,7 @@ define Package/$(PKG_NAME)
 	DEPENDS:=$(GO_ARCH_DEPENDS) +nodogsplash +luci
 	PROVIDES:=nodogsplash-files
 	CONFLICTS:=
-	REPLACES:=nodogsplash
+	REPLACES:=nodogsplash base-files
 endef
 
 define Package/$(PKG_NAME)/description
@@ -102,6 +102,10 @@ define Package/$(PKG_NAME)/install
 	# Tollgate config.json for mint and price
 	$(INSTALL_DIR) $(1)/etc/tollgate
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/files/etc/tollgate/config.json $(1)/etc/tollgate/config.json
+
+	# Banner for TollGate
+	$(INSTALL_DIR) $(1)/etc
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/files/etc/banner $(1)/etc/banner
 	
 	# NoDogSplash static files (CSS, JS, media)
 	$(INSTALL_DIR) $(1)/etc/nodogsplash/htdocs/static/css
@@ -111,9 +115,10 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/files/etc/nodogsplash/htdocs/static/js/* $(1)/etc/nodogsplash/htdocs/static/js/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/files/etc/nodogsplash/htdocs/static/media/* $(1)/etc/nodogsplash/htdocs/static/media/
 	
-	# Install external postinst script
-	#$(INSTALL_DIR) $(1)/CONTROL
-	#$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/postinst $(1)/CONTROL/postinst	
+	# Install control scripts
+	$(INSTALL_DIR) $(1)/CONTROL
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/CONTROL/preinst $(1)/CONTROL/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/CONTROL/postinst $(1)/CONTROL/
 endef
 
 # Update FILES declaration to include NoDogSplash files
