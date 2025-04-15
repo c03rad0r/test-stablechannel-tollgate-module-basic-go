@@ -19,9 +19,10 @@ jobs:
       options: --user root # https://github.com/actions/checkout/issues/1575#issuecomment-2536435128
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           path: ${{ env.PACKAGE_NAME }}/
+          fetch-depth: 0
 
       - name: Move sources to sdk folder
         run: |
@@ -35,6 +36,11 @@ jobs:
           
           # Install Go from backports
           apt-get install -y -t bookworm-backports golang-go
+
+      # - name: Run Go Tests
+      #   run: |
+      #     cd /builder/package/${{ env.PACKAGE_NAME }}/src
+      #     go test -v ./...
 
       - name: Configure SDK
         run: |

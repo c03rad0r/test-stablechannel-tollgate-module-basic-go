@@ -109,7 +109,7 @@ func decodeCashuToken(token string) (int, error) {
 
 // CollectPayment processes a Cashu token and swaps it for fresh proofs
 // Returns the fresh proofs and token directly
-func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool) error {
+func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool, relays []string) error {
 	// Extract proofs from token and process them
 	proofs, tokenMint, err := nip60.GetProofsAndMint(token)
 	if err != nil {
@@ -118,8 +118,9 @@ func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool
 	}
 
 	log.Printf("Successfully decoded token from mint %s", tokenMint)
+	log.Printf("Comparing with accepted mint: %s", acceptedMint)
 
-	if tokenMint != acceptedMint {
+	if !strings.EqualFold(tokenMint, acceptedMint) {
 		return fmt.Errorf("token mint %s is not accepted", tokenMint)
 	}
 
@@ -161,17 +162,16 @@ func CollectPayment(token string, privateKey string, relayPool *nostr.SimplePool
 
 	// Create a fresh relay pool specifically for token operations
 	// This ensures we have full write capabilities
-	relays := []string{
-		"wss://relay.damus.io",
-		"wss://nos.lol",
-	}
-
+	// relays = config.Relays
+	
 	// Create a new relay pool
 	freshPool := nostr.NewSimplePool(swapCtx)
 
+	log.Printf("Relays: %s", relays)
 	// Ensure at least one relay is connected
 	connectedRelays := 0
 	for _, relay := range relays {
+		log.Printf("Attempting to connect to relay: %s", relay)
 		_, err := freshPool.EnsureRelay(relay)
 		if err != nil {
 			log.Printf("Warning: failed to connect to relay %s: %v", relay, err)
@@ -252,7 +252,7 @@ func Payout(address string, amount int, wallet *nip60.Wallet, swapCtx context.Co
 		return swapErr
 	}
 
-	log.Printf("Successfully swapped for fresh proofs, new token: %s", freshProofs)
+	log.Printf("Successfully swapped for fresh proofs, new proofs: %+v", freshProofs)
 
 	// Create a token with the fresh proofs
 	freshToken := nip60.MakeTokenString(freshProofs, tokenMint)
