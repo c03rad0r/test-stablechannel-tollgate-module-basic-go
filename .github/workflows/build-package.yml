@@ -263,15 +263,3 @@ jobs:
           echo "Build Summary for ${{ matrix.architecture }}:"
           echo "✅ Package Release EventId: ${{ steps.publish_package.outputs.eventId }}"
           echo "✅ Package URL: ${{ steps.blossom_upload.outputs.url }}"
-
-  trigger-build-os:
-    name: Trigger new build TollGate OS
-    runs-on: ubuntu-latest
-    needs: publish-metadata
-    steps:
-    - name: Trigger OS Workflow
-      uses: peter-evans/repository-dispatch@v2
-      with:
-        token: ${{ secrets.REPO_ACCESS_TOKEN }}
-        repository: OpenTollGate/tollgate-os
-        event-type: update-release-json
