@@ -215,7 +215,7 @@ jobs:
           host: "https://blossom.swissdash.site"
           filePath: ${{ env.PACKAGE_PATH }}
           privatekey: ${{ secrets.NSEC_HEX }}
-          
+
       - name: Publish Package NIP-94 Metadata
         id: publish_package
         uses: OpenTollGate/nostr-publish-file-metadata-action@v0.1.0
