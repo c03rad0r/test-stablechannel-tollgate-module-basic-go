@@ -511,7 +511,7 @@ func (cm *ConfigManager) EnsureDefaultConfig() (*Config, error) {
 				//"wss://relay.tollgate.me", // TODO: make it more resillient to broken relays..
 			},
 			TrustedMaintainers: []string{
-				"5075e61f0b048148b60105c1dd72bbeae1957336ae5824087e52efa374f8416a",
+				"cd79fdac10292116fd4131bcf27b3bfc09ebf555c8c106dddc6de5bbf40a1a41",
 			},
 			ShowSetup:             true,
 			CurrentInstallationID: "",
