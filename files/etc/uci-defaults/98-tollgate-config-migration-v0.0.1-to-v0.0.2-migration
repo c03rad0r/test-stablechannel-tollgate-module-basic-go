@@ -23,7 +23,8 @@ create_backup "$CONFIG_FILE"
 create_backup "$INSTALL_FILE"
 
 # Migrate config.json
-jq '.accepted_mints |= map({url: ., min_balance: 100, balance_tolerance_percent: 10, payout_interval_seconds: 60, min_payout_amount: 200}) 
+jq '.config_version = "v0.0.2"
+    | .accepted_mints |= map({url: ., min_balance: 100, balance_tolerance_percent: 10, payout_interval_seconds: 60, min_payout_amount: 200})
     | .profit_share |= [
         {factor: 0.7, lightning_address: "tollgate@minibits.cash"},
         {factor: 0.3, lightning_address: "tollgate@minibits.cash"}
