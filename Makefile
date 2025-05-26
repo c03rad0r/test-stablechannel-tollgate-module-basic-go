@@ -9,8 +9,8 @@ PKG_FLAGS:=overwrite
 ifneq ($(TOPDIR),)
 	# Feed-specific settings (auto-clone from git)
 	PKG_SOURCE_PROTO:=git
-	PKG_SOURCE_VERSION:=$(shell git rev-parse HEAD) # Use exact current commit
 	PKG_SOURCE_URL:=https://github.com/OpenTollGate/tollgate-module-basic-go.git
+	PKG_SOURCE_VERSION:=$(shell git rev-parse HEAD) # Use exact current commit
 	PKG_MIRROR_HASH:=skip
 else
 	# SDK build context (local files)
