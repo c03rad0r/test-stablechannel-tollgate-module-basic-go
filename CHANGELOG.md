@@ -10,13 +10,7 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
-
-## [v0.5.0] - 2026-07-03
-
-Everything merged into `main` since `v0.4.0` (tagged 2026-04-06),
-including the `v0.5.0-alpha1` through `v0.5.0-alpha3` pre-releases.
-Release notes: [RELEASE-NOTES.md](RELEASE-NOTES.md).
+Changes on `main` since `v0.4.0` (tagged 2026-04-06).
 
 ### Added
 
@@ -28,9 +22,22 @@ Release notes: [RELEASE-NOTES.md](RELEASE-NOTES.md).
 - **Mint resilience.** Per-mint health tracking, try-all-mints fallback on
   payment, and automatic recovery of mints that come back online, so a single
   failing mint no longer blocks purchases
-  ([#120](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/120)),
-  plus aggressive mint health-check retry on startup so a router that boots
-  faster than its uplink still finds its mints.
+  ([#120](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/120)).
+- **Lightning capability probing.** Each reachable mint's Lightning backend is
+  now probed at startup (and on every proactive health check) by requesting a
+  minimal 1-sat mint quote. Only mints whose Lightning node answered are
+  advertised with a new `supports_ln` advertisement tag; when a mint's LN
+  backend goes down, Lightning is withheld (and reactively degraded on a live
+  invoice failure) instead of failing silently at purchase time. Reactive
+  degradation resets the LN recovery counter, so re-enabling Lightning after a
+  real purchase failure takes the same `lnRecoveryThreshold` consecutive
+  successful checks as a proactively detected outage. See
+  [TIP-02](docs/protocol/TIP-02.md). End-to-end coverage lives behind the
+  `integration` build tag: tests probe a live testnut mint
+  (`https://nofee.testnut.cashu.space`, which auto-settles invoices) to confirm
+  a real 1-sat bolt11 invoice is issued, and assert all three degradation
+  scenarios (LN up / LN backend down / LN recovered after `lnRecoveryThreshold`
+  consecutive successful checks).
 - **SSL/HTTPS management for the captive portal**, all new in this release and
   implemented in Go, with a self-signed certificate mode, hostname setup
   (`TollGate`), and captive-portal domain configuration
@@ -100,16 +107,7 @@ Release notes: [RELEASE-NOTES.md](RELEASE-NOTES.md).
 - **Two-router autopay reliability:** retry `ndsctl auth` briefly in the valve
   so a payment's gate-open no longer fails on the first attempt when NoDogSplash
   has not yet registered the reseller client (previously failed with "failed to
-  open gate" and recovered only via the token-recovery path ~60–90s later)
-  ([#170](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/170)).
-- **Wallet/mint registration:** register all accepted mints in the wallet at
-  startup, and always open the gate for bytes (data-metered) sessions
-  ([#167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167)).
-- **Config migration:** fix the `config_version` `v0.0.7` → `v0.0.8` migration
-  ([#174](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/174))
-  and the `upstream_detector` `go.mod`
-  ([#172](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/172))
-  ([#178](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/178)).
+  open gate" and recovered only via the token-recovery path ~60–90s later).
 - **BOLT11 / NoDogSplash:** make BOLT11 decode non-fatal and set the NoDogSplash
   gateway port to 2050
   ([#158](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/158)).
@@ -124,17 +122,9 @@ Release notes: [RELEASE-NOTES.md](RELEASE-NOTES.md).
 
 ### Changed / Internal
 
-- **Default profit share:** split the 0.21 dev share across three maintainer
-  identities (`c08r4d0r`, `amperstrand`, `origami74`, 0.07 each), each with its
-  own Lightning address; applies to fresh default configs, existing configs are
-  not rewritten
-  ([#165](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/165)).
 - **Release distribution:** publish redundantly to multiple relays and Blossom
   mirrors
-  ([#152](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/152)),
-  and list every successful Blossom mirror as a `url` tag on the NIP-94
-  release events
-  ([#183](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/183)).
+  ([#152](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/152)).
 - **CI:** split compile from package, add APK output and batched publish, native
   `.ipk` packaging with a flag-based matrix and a compression gate, and run the
   build workflow on pull requests
@@ -151,20 +141,9 @@ Release notes: [RELEASE-NOTES.md](RELEASE-NOTES.md).
   ([#155](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/155))
   and expand the test matrix to cover standalone-buildable modules
   ([#157](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/157)).
-- **CI:** skip the build/publish pipeline for fork PRs, which cannot access the
-  publishing secrets
-  ([#166](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/166)),
-  and build an `x86_64` `.apk` variant
-  ([#183](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/183)).
-- **Tests:** make the root-module test hermetic via a fresh temp config dir
-  (`testenv` build tag), so the suite runs off-router
-  ([#169](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/169),
-  [#179](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/179)).
 - Add `AGENTS.md` with LLM contributor rules and tighten `.gitignore` for
   planning docs
-  ([#159](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/159));
-  since expanded alongside the new [CONTRIBUTING.md](CONTRIBUTING.md) and
-  [PR-REVIEW.md](PR-REVIEW.md).
+  ([#159](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/159)).
 
 ## [v0.4.0] - 2026-04-06
 
@@ -172,6 +151,5 @@ Router-to-router autopay
 ([#77](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/77)) and
 earlier work. Not documented in this changelog.
 
-[Unreleased]: https://github.com/OpenTollGate/tollgate-module-basic-go/compare/v0.5.0...main
-[v0.5.0]: https://github.com/OpenTollGate/tollgate-module-basic-go/compare/v0.4.0...v0.5.0
+[Unreleased]: https://github.com/OpenTollGate/tollgate-module-basic-go/compare/v0.4.0...main
 [v0.4.0]: https://github.com/OpenTollGate/tollgate-module-basic-go/releases/tag/v0.4.0
