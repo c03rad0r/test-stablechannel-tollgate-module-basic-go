@@ -33,7 +33,7 @@ define Package/$(PKG_NAME)
 	SECTION:=net
 	CATEGORY:=Network
 	TITLE:=TollGate Basic Module
-	DEPENDS:=+nodogsplash +luci +jq
+	DEPENDS:=+nodogsplash +luci +jq +wireguard-tools +kmod-wireguard
 	PROVIDES:=nodogsplash-files
 	CONFLICTS:=
 	REPLACES:=nodogsplash base-files
@@ -167,9 +167,11 @@ define Package/$(PKG_NAME)/install
 
 	$(INSTALL_DIR) $(1)/usr/local/bin
 	$(INSTALL_BIN) $(PKG_MAKEFILE_DIR)files/usr/local/bin/first-login-setup $(1)/usr/local/bin/
+	$(INSTALL_BIN) $(PKG_MAKEFILE_DIR)files/usr/local/bin/vpn-manager $(1)/usr/local/bin/
 
 	$(INSTALL_DIR) $(1)/etc/tollgate
 	$(INSTALL_DIR) $(1)/etc/tollgate/ecash
+	$(INSTALL_DATA) $(PKG_MAKEFILE_DIR)files/etc/tollgate/VPN_README.md $(1)/etc/tollgate/
 
 	$(INSTALL_DIR) $(1)/etc/tollgate/tollgate-captive-portal-site
 	$(CP) $(PKG_MAKEFILE_DIR)files/tollgate-captive-portal-site/* $(1)/etc/tollgate/tollgate-captive-portal-site/
@@ -195,6 +197,8 @@ FILES_$(PKG_NAME) += \
 	/etc/init.d/tollgate-wrt \
 	/etc/config/firewall-tollgate \
 	/usr/local/bin/first-login-setup \
+	/usr/local/bin/vpn-manager \
+	/etc/tollgate/VPN_README.md \
 	/etc/uci-defaults/90-tollgate-captive-portal-symlink \
 	/etc/uci-defaults/95-router-identity \
 	/etc/uci-defaults/99-tollgate-setup \

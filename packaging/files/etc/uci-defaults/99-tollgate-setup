@@ -265,6 +265,90 @@ setup_private_network() {
     uci set firewall.private_forwarding.dest='wan'
 }
 
+setup_wireguard_vpn() {
+    # Generate WireGuard private and public keys
+    local private_key public_key
+    if command -v wg >/dev/null 2>&1; then
+        private_key=$(wg genkey)
+        public_key=$(echo "$private_key" | wg pubkey)
+    else
+        # Fallback: generate placeholder keys if wg command not available
+        private_key="$(hexdump -n 32 -e '4/1 "%02x"' /dev/urandom | tr '[:lower:]' '[:upper:]')"
+        public_key="$(echo "$private_key" | base64 -d 2>/dev/null | base64 2>/dev/null || echo "$private_key")"
+        log "Warning: wg command not available, using placeholder keys"
+    fi
+
+    # Create WireGuard interface configuration
+    uci set network.wgvpn='interface'
+    uci set network.wgvpn.proto='wireguard'
+    uci set network.wgvpn.private_key="$private_key"
+    uci set network.wgvpn.listen_port='51820'
+    
+    # Set VPN IP address (in a different subnet to avoid conflicts)
+    local lan_ip vpn_ip_prefix
+    lan_ip=$(uci -q get network.lan.ipaddr)
+    if [ -n "$lan_ip" ]; then
+        vpn_ip_prefix=$(echo "$lan_ip" | cut -d. -f1-2)
+        uci set network.wgvpn.address="${vpn_ip_prefix}.10.1/24"
+    else
+        uci set network.wgvpn.address='10.8.0.1/24'
+    fi
+
+    # Create firewall zone for VPN
+    uci set firewall.vpn='zone'
+    uci set firewall.vpn.name='vpn'
+    uci set firewall.vpn.network='wgvpn'
+    uci set firewall.vpn.input='ACCEPT'
+    uci set firewall.vpn.output='ACCEPT'
+    uci set firewall.vpn.forward='ACCEPT'
+
+    # Allow forwarding from VPN to LAN
+    uci set firewall.vpn_lan_forwarding='forwarding'
+    uci set firewall.vpn_lan_forwarding.src='vpn'
+    uci set firewall.vpn_lan_forwarding.dest='lan'
+
+    # Allow forwarding from LAN to VPN
+    uci set firewall.lan_vpn_forwarding='forwarding'
+    uci set firewall.lan_vpn_forwarding.src='lan'
+    uci set firewall.lan_vpn_forwarding.dest='vpn'
+
+    # Allow forwarding from VPN to WAN
+    uci set firewall.vpn_wan_forwarding='forwarding'
+    uci set firewall.vpn_wan_forwarding.src='vpn'
+    uci set firewall.vpn_wan_forwarding.dest='wan'
+
+    # Open WireGuard port on WAN
+    uci add firewall rule
+    uci set firewall.@rule[-1].name='Allow-WireGuard-VPN'
+    uci set firewall.@rule[-1].src='wan'
+    uci set firewall.@rule[-1].dest_port='51820'
+    uci set firewall.@rule[-1].proto='udp'
+    uci set firewall.@rule[-1].target='ACCEPT'
+
+    # Create VPN configuration directory and save public key
+    mkdir -p /etc/tollgate/vpn
+    echo "$public_key" > /etc/tollgate/vpn/server_public_key.txt
+    echo "$private_key" > /etc/tollgate/vpn/server_private_key.txt
+    chmod 600 /etc/tollgate/vpn/server_private_key.txt
+
+    # Create sample client configuration
+    cat > /etc/tollgate/vpn/sample_client.conf << EOF
+[Interface]
+PrivateKey = <CLIENT_PRIVATE_KEY>
+Address = $(uci get network.wgvpn.address | sed 's/1$/2/')
+DNS = 1.1.1.1, 1.0.0.1
+
+[Peer]
+PublicKey = $public_key
+AllowedIPs = 0.0.0.0/0
+Endpoint = $(uci -q get system.@system[0].hostname || echo 'TollGate'):51820
+PersistentKeepalive = 25
+EOF
+
+    log "WireGuard VPN configured - Server public key: $public_key"
+    log "Client config saved to /etc/tollgate/vpn/sample_client.conf"
+}
+
 commit_all() {
     uci commit system
     uci commit network
@@ -291,6 +375,7 @@ setup_profile_hook
 setup_disable_ipv6_lan
 enable_modems
 setup_private_network        # consumes RANDOM_SUFFIX
+setup_wireguard_vpn          # setup VPN server and firewall rules
 commit_all
 
 log "TollGate setup completed"
