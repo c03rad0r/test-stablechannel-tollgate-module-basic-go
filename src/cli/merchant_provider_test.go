@@ -49,6 +49,8 @@ func (m *namedMerchant) GetLightningInvoiceStatus(quoteID, macAddress string) (*
 	return nil, nil
 }
 func (m *namedMerchant) SetOnReachableSetChanged(func()) {}
+func (m *namedMerchant) Shutdown() error                  { return nil }
+func (m *namedMerchant) StartRateLimitCleanup()           {}
 
 func getCLIMerchantName(s *CLIServer) string {
 	m := s.merchantProvider.GetMerchant()

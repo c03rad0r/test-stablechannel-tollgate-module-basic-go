@@ -5,6 +5,7 @@ package merchant
 import (
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/OpenTollGate/tollgate-module-basic-go/src/utils"
@@ -58,6 +59,13 @@ type lightningQuoteRecord struct {
 }
 
 func (m *Merchant) RequestLightningInvoice(macAddress, mintURL string, amount uint64) (*LightningInvoice, error) {
+	// Check rate limit for Lightning invoice requests (more restrictive since they're expensive)
+	allowed, waitTime := m.rateLimiter.CheckRateLimitMAC(macAddress, "lightning_invoice")
+	if !allowed {
+		log.Printf("RequestLightningInvoice: rate limit exceeded for MAC %s, wait time: %v", macAddress, waitTime)
+		return nil, fmt.Errorf("rate limit exceeded for Lightning invoice requests. Please wait %v before trying again", waitTime)
+	}
+
 	if !utils.ValidateMACAddress(macAddress) {
 		return nil, fmt.Errorf("invalid MAC address: %s", macAddress)
 	}

@@ -172,6 +172,10 @@ func (m *MerchantDegraded) StartDataUsageMonitoring() {
 	log.Printf("WARNING: Data usage monitoring not started — no reachable mints (degraded mode)")
 }
 
+func (m *MerchantDegraded) StartRateLimitCleanup() {
+	log.Printf("WARNING: Rate limit cleanup not started — no reachable mints (degraded mode)")
+}
+
 func (m *MerchantDegraded) CreateNoticeEvent(level, code, message, customerPubkey string) (*nostr.Event, error) {
 	return createNoticeEvent(m.configManager, level, code, message, customerPubkey)
 }

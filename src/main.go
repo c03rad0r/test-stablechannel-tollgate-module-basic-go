@@ -25,6 +25,7 @@ import (
 	"github.com/OpenTollGate/tollgate-module-basic-go/src/upstream_session_manager"
 	"github.com/OpenTollGate/tollgate-module-basic-go/src/wireless_gateway_manager"
 
+	"flag"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/sirupsen/logrus"
 )
@@ -812,6 +813,15 @@ func main() {
 	}
 
 	mainLogger.Info("Starting HTTP server on all interfaces...")
+
+	// Parse command line flags for graceful restart
+	var gracefulRestart bool
+	var listenerFDStr string
+	flag.BoolVar(&gracefulRestart, "graceful-restart", false, "Enable graceful restart mode")
+	flag.StringVar(&listenerFDStr, "listener-fd", "", "File descriptor for inherited listener during graceful restart")
+	flag.Parse()
+
+	// Create server with proper timeouts
 	server := &http.Server{
 		Addr: port,
 		// Add explicit timeouts to avoid potential deadlocks in Go 1.24
@@ -820,7 +830,56 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	mainLogger.Fatal(server.ListenAndServe())
+	// Set up graceful restart functionality
+	gracefulShutdown := NewGracefulShutdown(server, logrus.StandardLogger())
+
+	// Set up components for graceful shutdown/restart
+	var merchantInterface merchant.MerchantInterface
+	if merchantProvider != nil && merchantProvider.inner != nil {
+		merchantInterface = merchantProvider.inner.GetMerchant()
+	}
+
+	gracefulShutdown.SetComponents(configManager, merchantInterface, cliServer, nil)
+
+	// Handle graceful restart with socket inheritance
+	var listener net.Listener
+	var err error
+
+	if gracefulRestart && listenerFDStr != "" {
+		// Create listener from inherited file descriptor (for graceful restart)
+		mainLogger.Info("Creating listener from inherited file descriptor for graceful restart")
+		listener, err = CreateListenerFromFileDescriptor(listenerFDStr)
+		if err != nil {
+			mainLogger.WithError(err).Fatal("Failed to create listener from file descriptor")
+		}
+		gracefulShutdown.SetListener(listener)
+	} else {
+		// Create new listener
+		mainLogger.Info("Creating new listener")
+		listener, err = net.Listen("tcp", port)
+		if err != nil {
+			mainLogger.WithError(err).Fatal("Failed to create listener")
+		}
+		gracefulShutdown.SetListener(listener)
+	}
+
+	// Register health check endpoint
+	http.HandleFunc("/health", gracefulShutdown.healthHandler)
+	mainLogger.Info("Health check endpoint registered at /health")
+
+	// Start the server
+	go func() {
+		mainLogger.Info("Server starting to accept connections...")
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			mainLogger.WithError(err).Fatal("Server failed")
+		}
+	}()
+
+	// Wait for shutdown/restart signals
+	gracefulShutdown.WaitForShutdown()
+
+	// This will be reached when shutdown is complete
+	mainLogger.Info("Application shutting down gracefully")
 }
 
 func isLocalRequest(r *http.Request) bool {

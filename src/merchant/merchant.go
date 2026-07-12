@@ -45,6 +45,7 @@ type MerchantInterface interface {
 	GetAdvertisement() string
 	StartPayoutRoutine()
 	StartDataUsageMonitoring()
+	StartRateLimitCleanup()
 	CreateNoticeEvent(level, code, message, customerPubkey string) (*nostr.Event, error)
 	GetSession(macAddress string) (*CustomerSession, error)
 	AddAllotment(macAddress, metric string, amount uint64) (*CustomerSession, error)
@@ -63,6 +64,7 @@ type Merchant struct {
 	sessionMu         sync.RWMutex
 	lightningQuotes   map[string]*lightningQuoteRecord
 	lightningQuoteMu  sync.RWMutex
+	rateLimiter       *RateLimiter
 }
 
 func New(configManager *config_manager.ConfigManager) (MerchantInterface, error) {
@@ -147,11 +149,13 @@ func newFullMerchant(configManager *config_manager.ConfigManager, mintHealthTrac
 		mintHealthTracker: mintHealthTracker,
 		customerSessions:  make(map[string]*CustomerSession),
 		lightningQuotes:   make(map[string]*lightningQuoteRecord),
+		rateLimiter:       NewRateLimiter(),
 	}
 
 	m.StartPayoutRoutine()
 	m.StartDataUsageMonitoring()
 	m.startLightningQuoteJanitor()
+	m.StartRateLimitCleanup()
 
 	return m, nil
 }
@@ -210,6 +214,26 @@ func (m *Merchant) StartDataUsageMonitoring() {
 		defer ticker.Stop()
 		for range ticker.C {
 			m.checkDataUsage()
+		}
+	}()
+}
+
+// StartRateLimitCleanup starts a background routine to clean up expired rate limit records
+func (m *Merchant) StartRateLimitCleanup() {
+	log.Printf("Starting rate limit cleanup routine")
+
+	ticker := time.NewTicker(5 * time.Minute) // Clean up every 5 minutes
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			recordCount := m.rateLimiter.GetRecordCount()
+			m.rateLimiter.Cleanup()
+			newRecordCount := m.rateLimiter.GetRecordCount()
+			
+			if recordCount != newRecordCount {
+				log.Printf("Rate limit cleanup: removed %d expired records (from %d to %d)", 
+					recordCount-newRecordCount, recordCount, newRecordCount)
+			}
 		}
 	}()
 }
@@ -358,6 +382,18 @@ type PurchaseSessionResult struct {
 
 // PurchaseSession processes a payment with cashu token and MAC address, returns either a session event or a notice event
 func (m *Merchant) PurchaseSession(cashuToken string, macAddress string) (*nostr.Event, error) {
+	// Check rate limit for this MAC address
+	allowed, waitTime := m.rateLimiter.CheckRateLimitMAC(macAddress, "purchase")
+	if !allowed {
+		log.Printf("PurchaseSession: rate limit exceeded for MAC %s, wait time: %v", macAddress, waitTime)
+		noticeEvent, noticeErr := m.CreateNoticeEvent("error", "rate-limit-exceeded",
+			fmt.Sprintf("Too many purchase requests. Please wait %v before trying again.", waitTime), macAddress)
+		if noticeErr != nil {
+			return nil, fmt.Errorf("rate limit exceeded and failed to create notice: %w", noticeErr)
+		}
+		return noticeEvent, nil
+	}
+
 	// Validate MAC address
 	if !utils.ValidateMACAddress(macAddress) {
 		noticeEvent, noticeErr := m.CreateNoticeEvent("error", "invalid-mac-address",
@@ -809,7 +845,14 @@ func (m *Merchant) CreateNoticeEvent(level, code, message, customerPubkey string
 
 // CreatePaymentToken creates a payment token for the specified mint and amount
 func (m *Merchant) CreatePaymentToken(mintURL string, amount uint64) (string, error) {
-	// Check balance before attempting to send
+	// Check rate limit for this mint URL (use IP-based or client identifier)
+	allowed, waitTime := m.rateLimiter.CheckRateLimitMAC(mintURL, "create_token")
+	if !allowed {
+		log.Printf("CreatePaymentToken: rate limit exceeded for mint %s, wait time: %v", mintURL, waitTime)
+		return "", fmt.Errorf("rate limit exceeded for token creation. Please wait %v before trying again", waitTime)
+	}
+
+	log.Printf("CreatePaymentToken: requested amount=%d for mint=%s", amount, mintURL)
 	balance := m.tollwallet.GetBalanceByMint(mintURL)
 	totalBalance := m.tollwallet.GetBalance()
 
@@ -892,7 +935,14 @@ func (m *Merchant) DrainMint(mintURL string) (string, uint64, error) {
 
 // CreatePaymentTokenWithOverpayment creates a payment token with overpayment capability
 func (m *Merchant) CreatePaymentTokenWithOverpayment(mintURL string, amount uint64, maxOverpaymentPercent uint64, maxOverpaymentAbsolute uint64) (string, error) {
-	// Use the tollwallet's new SendWithOverpayment method
+	// Check rate limit for this mint URL
+	allowed, waitTime := m.rateLimiter.CheckRateLimitMAC(mintURL, "create_token")
+	if !allowed {
+		log.Printf("CreatePaymentTokenWithOverpayment: rate limit exceeded for mint %s, wait time: %v", mintURL, waitTime)
+		return "", fmt.Errorf("rate limit exceeded for token creation. Please wait %v before trying again", waitTime)
+	}
+
+	log.Printf("CreatePaymentTokenWithOverpayment: requested amount=%d for mint=%s", amount, mintURL)
 	tokenString, err := m.tollwallet.SendWithOverpayment(amount, mintURL, maxOverpaymentPercent, maxOverpaymentAbsolute)
 	if err != nil {
 		return "", fmt.Errorf("failed to create payment token with overpayment: %w", err)
@@ -1012,6 +1062,13 @@ func (m *Merchant) AddAllotment(macAddress, metric string, amount uint64) (*Cust
 
 // Fund adds a cashu token to the wallet
 func (m *Merchant) Fund(cashuToken string) (uint64, error) {
+	// Check rate limit for fund operations (use token length as a simple identifier)
+	allowed, waitTime := m.rateLimiter.CheckRateLimitMAC("fund-operation", "fund")
+	if !allowed {
+		log.Printf("Fund: rate limit exceeded, wait time: %v", waitTime)
+		return 0, fmt.Errorf("rate limit exceeded for fund operations. Please wait %v before trying again", waitTime)
+	}
+
 	log.Printf("Funding wallet with cashu token (length: %d)", len(cashuToken))
 
 	// Basic validation - cashu tokens typically start with "cashuA" and are much longer

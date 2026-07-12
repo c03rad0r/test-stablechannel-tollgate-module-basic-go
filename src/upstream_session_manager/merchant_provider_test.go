@@ -21,6 +21,7 @@ func (m *namedMerchant) GetBalanceByMint(mintURL string) uint64         { return
 func (m *namedMerchant) Fund(cashuToken string) (uint64, error) {
 	return 0, fmt.Errorf("mock: %s", m.name)
 }
+func (m *namedMerchant) StartRateLimitCleanup() {}
 
 func providerMerchantName(p merchant_types.MerchantProvider) string {
 	m := p.GetMerchant()

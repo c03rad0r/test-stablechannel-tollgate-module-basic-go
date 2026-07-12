@@ -34,6 +34,12 @@ const (
 	aggressiveProbeTimeout  = 10 * time.Second
 	aggressiveDuration      = 5 * time.Minute
 
+	// Emergency scaling fix: add cooldown periods to prevent oscillations
+	aggressiveModeCooldown            = 2 * time.Minute  // Cooldown before re-entering aggressive mode
+	normalModeCooldown                = 1 * time.Minute  // Cooldown before exiting aggressive mode
+	minLogInterval                    = 30 * time.Second // Minimum interval between similar log messages
+	aggressiveRecoveryThreshold uint8 = 2                // More conservative recovery in aggressive mode (was effectively 1)
+
 	// Lightning capability probe. We verify a mint's LN backend is actually
 	// working by requesting a minimal 1-sat mint quote (NUT-04). The mint's
 	// /v1/info only advertises protocol-level NUT-04 support — it does NOT tell
@@ -50,8 +56,16 @@ type mintConfigProvider interface {
 }
 
 type MintHealthTracker struct {
-	mu                     sync.RWMutex
-	reachableMints         map[string]bool
+	mu             sync.RWMutex
+	reachableMints map[string]bool
+
+	// Emergency scaling fix: fields to prevent oscillations
+	lastAggressiveExit   time.Time
+	lastNormalExit       time.Time
+	lastLogTime          map[string]time.Time
+	inAggressiveMode     bool
+	aggressiveModeExitCh chan struct{}
+
 	supportsLN             map[string]bool
 	consecutiveSuccesses   map[string]uint8
 	lnConsecutiveSuccesses map[string]uint8
@@ -68,7 +82,11 @@ type MintHealthTracker struct {
 
 func NewMintHealthTracker(configProvider mintConfigProvider) *MintHealthTracker {
 	return &MintHealthTracker{
-		reachableMints:         make(map[string]bool),
+		reachableMints: make(map[string]bool),
+		// Emergency scaling fix: initialize oscillation prevention fields
+		lastLogTime:      make(map[string]time.Time),
+		inAggressiveMode: false,
+
 		supportsLN:             make(map[string]bool),
 		consecutiveSuccesses:   make(map[string]uint8),
 		lnConsecutiveSuccesses: make(map[string]uint8),
@@ -91,17 +109,26 @@ func (t *MintHealthTracker) StartProactiveChecks() {
 	}
 	t.stopCh = make(chan struct{})
 	stopCh := t.stopCh
-	needAggressive := t.reachableCount == 0
+
+	// Emergency scaling fix: initialize cooldown timers
+	now := time.Now()
+	t.lastAggressiveExit = now.Add(-aggressiveModeCooldown) // Allow immediate aggressive mode at startup
+	t.lastNormalExit = now.Add(-normalModeCooldown)
+
+	needAggressive := t.reachableCount == 0 && t.canEnterAggressiveMode()
 	t.mu.Unlock()
+
+	// Emergency scaling fix: use rate limited logging
+	t.rateLimitedLog("StartProactiveChecks", "starting aggressive retry (no reachable mints at startup)")
 
 	go func() {
 		var aggressiveDone chan struct{}
 		if needAggressive {
-			log.Printf("StartProactiveChecks: starting aggressive retry (no reachable mints at startup)")
+			// Emergency scaling fix: removed redundant log, using rateLimitedLog above
 			aggressiveDone = t.runAggressiveRetry(stopCh)
 			go func() {
 				<-aggressiveDone
-				log.Printf("StartProactiveChecks: aggressive retry completed")
+				t.rateLimitedLog("StartProactiveChecks", "aggressive retry completed")
 			}()
 		}
 
@@ -130,14 +157,19 @@ func (t *MintHealthTracker) runAggressiveRetry(stopCh chan struct{}) chan struct
 		defer timer.Stop()
 
 		for {
+			// Emergency scaling fix: mark that we're in aggressive mode
+			t.mu.Lock()
+			t.inAggressiveMode = true
+			t.mu.Unlock()
+
 			select {
 			case <-ticker.C:
 				if t.runAggressiveCheck(aggressiveClient) {
-					log.Printf("runAggressiveRetry: mint became reachable, stopping aggressive mode")
+					t.rateLimitedLog("runAggressiveRetry", "mint became reachable, stopping aggressive mode")
 					return
 				}
 			case <-timer.C:
-				log.Printf("runAggressiveRetry: aggressive period ended (%v), falling back to normal interval", aggressiveDuration)
+				t.rateLimitedLog("runAggressiveRetry", "aggressive period ended (%v), falling back to normal interval", aggressiveDuration)
 				return
 			case <-stopCh:
 				return
@@ -154,6 +186,36 @@ func (t *MintHealthTracker) Stop() {
 		t.stopCh = nil
 	}
 	t.mu.Unlock()
+}
+
+// Emergency scaling fix: check if we can enter aggressive mode (respects cooldown)
+func (t *MintHealthTracker) canEnterAggressiveMode() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return time.Since(t.lastAggressiveExit) >= aggressiveModeCooldown
+}
+
+// Emergency scaling fix: check if we can exit aggressive mode (respects cooldown)
+func (t *MintHealthTracker) canExitAggressiveMode() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return time.Since(t.lastNormalExit) >= normalModeCooldown
+}
+
+// Emergency scaling fix: rate limited logging to prevent log spam
+func (t *MintHealthTracker) rateLimitedLog(prefix string, format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	key := prefix + ":" + message
+	t.mu.RLock()
+	lastLog, exists := t.lastLogTime[key]
+	t.mu.RUnlock()
+
+	if !exists || time.Since(lastLog) >= minLogInterval {
+		log.Printf(prefix+": "+message, args...)
+		t.mu.Lock()
+		t.lastLogTime[key] = time.Now()
+		t.mu.Unlock()
+	}
 }
 
 func (t *MintHealthTracker) IsReachable(mintURL string) bool {
@@ -315,7 +377,7 @@ func (t *MintHealthTracker) runProactiveCheck() {
 		return
 	}
 
-	log.Printf("runProactiveCheck: probing %d mint(s)", len(config.AcceptedMints))
+	t.rateLimitedLog("runProactiveCheck", "probing %d mint(s)", len(config.AcceptedMints))
 	reachable := make(map[string]bool, len(config.AcceptedMints))
 	lnSupported := make(map[string]bool, len(config.AcceptedMints))
 	for _, mint := range config.AcceptedMints {
@@ -328,10 +390,19 @@ func (t *MintHealthTracker) runProactiveCheck() {
 
 	t.mu.Lock()
 
+	// Emergency scaling fix: check if we need to enter aggressive mode
+	shouldEnterAggressive := false
+	for _, mint := range config.AcceptedMints {
+		if !reachable[mint.URL] && t.reachableMints[mint.URL] {
+			// A mint that was reachable is now unreachable
+			shouldEnterAggressive = true
+			break
+		}
+	}
+
 	for _, mint := range config.AcceptedMints {
 		if reachable[mint.URL] {
 			t.consecutiveSuccesses[mint.URL]++
-
 			if !t.reachableMints[mint.URL] && t.consecutiveSuccesses[mint.URL] >= t.recoveryThreshold {
 				t.reachableMints[mint.URL] = true
 			}
@@ -376,6 +447,18 @@ func (t *MintHealthTracker) runProactiveCheck() {
 	setChanged := newCount != t.reachableCount
 	t.reachableCount = newCount
 
+	// Emergency scaling fix: update normal mode exit time
+	t.lastNormalExit = time.Now()
+
+	// Emergency scaling fix: start aggressive mode if needed and cooldown allows
+	if shouldEnterAggressive && newCount == 0 && t.canEnterAggressiveMode() && !t.inAggressiveMode {
+		t.inAggressiveMode = true
+		go func() {
+			aggressiveDone := t.runAggressiveRetry(t.stopCh)
+			<-aggressiveDone
+		}()
+	}
+
 	var callbacks []func()
 
 	if !t.hadReachableMint && t.onFirstReachable != nil {
@@ -395,12 +478,12 @@ func (t *MintHealthTracker) runProactiveCheck() {
 	t.mu.Unlock()
 
 	for _, cb := range callbacks {
-		log.Printf("runProactiveCheck: firing callback (hadReachable=%v, setChanged=%v)", t.hadReachableMint, setChanged)
+		t.rateLimitedLog("runProactiveCheck", "firing callback (hadReachable=%v, setChanged=%v)", t.hadReachableMint, setChanged)
 		go cb()
 	}
 }
 
-// runAggressiveCheck probes mints with immediate recovery (threshold=1).
+// runAggressiveCheck probes mints with conservative recovery (threshold=2).
 // Returns true if a previously-unreachable mint became reachable.
 func (t *MintHealthTracker) runAggressiveCheck(aggressiveClient *http.Client) bool {
 	config := t.configProvider.GetConfig()
@@ -408,7 +491,7 @@ func (t *MintHealthTracker) runAggressiveCheck(aggressiveClient *http.Client) bo
 		return false
 	}
 
-	log.Printf("runAggressiveCheck: probing %d mint(s) with immediate recovery", len(config.AcceptedMints))
+	t.rateLimitedLog("runAggressiveCheck", "probing %d mint(s) with conservative recovery", len(config.AcceptedMints))
 	reachable := make(map[string]bool, len(config.AcceptedMints))
 	lnSupported := make(map[string]bool, len(config.AcceptedMints))
 	for _, mint := range config.AcceptedMints {
@@ -425,7 +508,9 @@ func (t *MintHealthTracker) runAggressiveCheck(aggressiveClient *http.Client) bo
 	for _, mint := range config.AcceptedMints {
 		if reachable[mint.URL] {
 			t.consecutiveSuccesses[mint.URL]++
-			if !t.reachableMints[mint.URL] {
+
+			// Emergency scaling fix: use conservative recovery threshold in aggressive mode
+			if !t.reachableMints[mint.URL] && t.consecutiveSuccesses[mint.URL] >= aggressiveRecoveryThreshold {
 				t.reachableMints[mint.URL] = true
 				recovered = true
 			}
@@ -475,10 +560,16 @@ func (t *MintHealthTracker) runAggressiveCheck(aggressiveClient *http.Client) bo
 		callbacks = append(callbacks, t.onReachableSetChanged)
 	}
 
+	// Emergency scaling fix: update aggressive mode exit time and state
+	if recovered && t.canExitAggressiveMode() {
+		t.lastAggressiveExit = time.Now()
+		t.inAggressiveMode = false
+	}
+
 	t.mu.Unlock()
 
 	for _, cb := range callbacks {
-		log.Printf("runAggressiveCheck: firing callback (hadReachable=%v, setChanged=%v)", t.hadReachableMint, setChanged)
+		t.rateLimitedLog("runAggressiveCheck", "firing callback (hadReachable=%v, setChanged=%v)", t.hadReachableMint, setChanged)
 		go cb()
 	}
 
@@ -496,13 +587,13 @@ func (t *MintHealthTracker) probeMintWith(mintURL string, client *http.Client) b
 	resp, err := client.Get(url)
 	elapsed := time.Since(start)
 	if err != nil {
-		log.Printf("mint probe FAILED: url=%s elapsed=%s error=%v", url, elapsed, err)
+		t.rateLimitedLog("mint probe", "FAILED: url=%s elapsed=%s error=%v", url, elapsed, err)
 		return false
 	}
 	defer resp.Body.Close()
 
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
-	log.Printf("mint probe: url=%s status=%d elapsed=%s ok=%v", url, resp.StatusCode, elapsed, ok)
+	t.rateLimitedLog("mint probe", "url=%s status=%d elapsed=%s ok=%v", url, resp.StatusCode, elapsed, ok)
 	return ok
 }
 
@@ -526,13 +617,13 @@ func (t *MintHealthTracker) probeLightningCapability(mintURL string, client *htt
 	resp, err := client.Post(url, "application/json", strings.NewReader(body))
 	elapsed := time.Since(start)
 	if err != nil {
-		log.Printf("ln probe FAILED: url=%s elapsed=%s error=%v", url, elapsed, err)
+		t.rateLimitedLog("ln probe", "FAILED: url=%s elapsed=%s error=%v", url, elapsed, err)
 		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("ln probe: url=%s status=%d elapsed=%s ok=false (non-2xx; LN backend likely down)", url, resp.StatusCode, elapsed)
+		t.rateLimitedLog("ln probe", "url=%s status=%d elapsed=%s ok=false (non-2xx; LN backend likely down)", url, resp.StatusCode, elapsed)
 		return false
 	}
 
@@ -540,11 +631,11 @@ func (t *MintHealthTracker) probeLightningCapability(mintURL string, client *htt
 		Request string `json:"request"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&quote); err != nil {
-		log.Printf("ln probe: url=%s decode error=%v", url, err)
+		t.rateLimitedLog("ln probe", "url=%s decode error=%v", url, err)
 		return false
 	}
 
 	ok := quote.Request != ""
-	log.Printf("ln probe: url=%s elapsed=%s ok=%v (invoice_len=%d)", url, elapsed, ok, len(quote.Request))
+	t.rateLimitedLog("ln probe", "url=%s elapsed=%s ok=%v (invoice_len=%d)", url, elapsed, ok, len(quote.Request))
 	return ok
 }
