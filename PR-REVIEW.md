@@ -23,6 +23,12 @@ Skip the review (and say so) if the PR is:
   that a thirteen-point pass is overkill — a one-paragraph informal
   review is better in that case
 
+**Independent-review gate.** Before proceeding: check whether the
+reviewer is the same person as the PR author. **A contributor may not
+review their own PR.** If the only reviews on the PR are self-reviews
+by the author, flag this — the PR needs independent review before it
+can be merged. See CONTRIBUTING.md § "Independent review policy."
+
 ## Step 2 — Gather context
 
 Read these *before* analyzing the diff so the review is grounded:

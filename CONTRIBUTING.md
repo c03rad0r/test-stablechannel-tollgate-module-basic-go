@@ -189,6 +189,23 @@ running it yourself saves a review round trip.
 - **Commit message references the bug**: the symptom, the root cause
   in one sentence, and the fix shape.
 
+### Independent review policy — no self-review
+
+**A contributor may not review or approve their own PR.** This applies
+to all contributors regardless of role. The review must come from a
+different person than the PR author.
+
+This rule exists because self-review provides false confidence. An
+author reviewing their own work tends to confirm their own assumptions
+rather than challenge them — the exact failure mode the review process
+exists to catch. A self-review is worse than no review because it
+creates the illusion that the code has been checked.
+
+If you are the only maintainer available, say so in the PR and request
+review explicitly from another contributor. Do not post a self-review
+comment as a substitute. PRs that have only self-reviews will not be
+merged until an independent reviewer signs off.
+
 ### Merge mechanics
 
 PRs are merged via **squash-merge**. One logical change per PR becomes
