@@ -41,6 +41,11 @@ reference/
 
 # Planning docs — internal, not for release
 docs/tmp/
+PLAN-*.md
+REBASE-PLAN.md
+simple-entrypoint.sh
+go.sum
 
-# auto-generated opencode session handover (do not commit)
+# auto-generated opencode session handover / review notes (do not commit)
 HANDOVER.md
+REVIEW.md
