@@ -1,17 +1,17 @@
 package config_manager
 
 type FieldSchema struct {
-	Name        string            `json:"name"`
-	Type        string            `json:"type"`
-	Description string            `json:"description,omitempty"`
-	Default     interface{}       `json:"default,omitempty"`
-	Required    bool              `json:"required"`
-	Enum        []string          `json:"enum,omitempty"`
-	Min         interface{}       `json:"min,omitempty"`
-	Max         interface{}       `json:"max,omitempty"`
-	Children    []FieldSchema     `json:"children,omitempty"`
-	JSONKey     string            `json:"json_key"`
-	Editable    bool              `json:"editable"`
+	Name        string        `json:"name"`
+	Type        string        `json:"type"`
+	Description string        `json:"description,omitempty"`
+	Default     interface{}   `json:"default,omitempty"`
+	Required    bool          `json:"required"`
+	Enum        []string      `json:"enum,omitempty"`
+	Min         interface{}   `json:"min,omitempty"`
+	Max         interface{}   `json:"max,omitempty"`
+	Children    []FieldSchema `json:"children,omitempty"`
+	JSONKey     string        `json:"json_key"`
+	Editable    bool          `json:"editable"`
 }
 
 func GetConfigSchema() []FieldSchema {
@@ -65,7 +65,7 @@ func GetConfigSchema() []FieldSchema {
 			Name: "ProfitShare", JSONKey: "profit_share", Type: "array",
 			Description: "Profit sharing configuration", Required: true, Editable: true,
 			Children: []FieldSchema{
-			{Name: "Factor", JSONKey: "factor", Type: "float64", Description: "Share ratio (0.0\u20131.0). All factors MUST sum to 1.0. Use 0.79 not 79\u2014this is a ratio, not a percentage.", Required: true, Editable: true, Min: 0.0, Max: 1.0},
+				{Name: "Factor", JSONKey: "factor", Type: "float64", Description: "Share ratio (0.0\u20131.0). All factors MUST sum to 1.0. Use 0.79 not 79\u2014this is a ratio, not a percentage.", Required: true, Editable: true, Min: 0.0, Max: 1.0},
 				{Name: "Identity", JSONKey: "identity", Type: "string", Description: "Identity name from identities.json", Required: true, Editable: true},
 			},
 		},
@@ -130,6 +130,32 @@ func GetConfigSchema() []FieldSchema {
 				{Name: "PostSwitchWaitSeconds", JSONKey: "post_switch_wait_seconds", Type: "int", Description: "Seconds to wait after a switch before scoring", Default: 5, Required: true, Editable: true, Min: 1, Max: 60},
 				{Name: "DHCPTimeoutSeconds", JSONKey: "dhcp_timeout_seconds", Type: "int", Description: "Timeout for DHCP after connecting to a network", Default: 180, Required: true, Editable: true, Min: 10, Max: 600},
 				{Name: "ManualPauseSeconds", JSONKey: "manual_pause_seconds", Type: "int", Description: "Seconds to pause scanning after manual intervention", Default: 120, Required: true, Editable: true, Min: 10, Max: 600},
+			},
+		},
+		{
+			Name: "MPTCPBonding", JSONKey: "mptcp_bonding", Type: "object",
+			Description: "MPTCP multi-WAN bonding (opt-in). Transparent-proxies all traffic through a Shadowsocks server over MPTCP to aggregate bandwidth across WAN interfaces.", Required: false, Editable: true,
+			Children: []FieldSchema{
+				{Name: "Enabled", JSONKey: "enabled", Type: "bool", Description: "Enable MPTCP bonding", Default: false, Required: true, Editable: true},
+				{Name: "MaxSubflows", JSONKey: "max_subflows", Type: "int", Description: "Maximum MPTCP subflows (1-8)", Default: 2, Required: true, Editable: true, Min: 1, Max: 8},
+				{Name: "FallbackToNormal", JSONKey: "fallback_to_normal", Type: "bool", Description: "Fall back to normal routing if bonding server unreachable", Default: true, Required: true, Editable: true},
+				{
+					Name: "Server", JSONKey: "server", Type: "object", Description: "Shadowsocks MPTCP server endpoint", Required: false, Editable: true,
+					Children: []FieldSchema{
+						{Name: "Host", JSONKey: "host", Type: "string", Description: "Server hostname or IP", Required: false, Editable: true},
+						{Name: "Port", JSONKey: "port", Type: "int", Description: "Server port", Default: 65101, Required: true, Editable: true, Min: 1, Max: 65535},
+						{Name: "ShadowsocksPassword", JSONKey: "shadowsocks_password", Type: "string", Description: "Shadowsocks password", Required: false, Editable: true},
+						{Name: "ShadowsocksMethod", JSONKey: "shadowsocks_method", Type: "string", Description: "Shadowsocks cipher method", Default: "chacha20-ietf-poly1305", Required: true, Editable: true, Enum: []string{"chacha20-ietf-poly1305", "aes-256-gcm", "aes-128-gcm"}},
+						{Name: "LocalProxyPort", JSONKey: "local_proxy_port", Type: "int", Description: "Local SOCKS proxy port", Default: 1080, Required: true, Editable: true, Min: 1024, Max: 65535},
+					},
+				},
+				{
+					Name: "Interfaces", JSONKey: "interfaces", Type: "array", Description: "WAN interfaces to bond", Required: false, Editable: true,
+					Children: []FieldSchema{
+						{Name: "Name", JSONKey: "name", Type: "string", Description: "Interface name (e.g. eth0, wlan0)", Required: true, Editable: true},
+						{Name: "Priority", JSONKey: "priority", Type: "int", Description: "Priority (lower = preferred)", Default: 1, Required: true, Editable: true, Min: 1, Max: 100},
+					},
+				},
 			},
 		},
 	}

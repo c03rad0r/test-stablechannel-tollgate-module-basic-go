@@ -46,8 +46,8 @@ func TestConfigMigration_v007_to_v008(t *testing.T) {
 		t.Fatalf("EnsureDefaultConfig failed: %v", err)
 	}
 
-	if migrated.ConfigVersion != "v0.0.8" {
-		t.Errorf("config_version: got %s, want v0.0.8", migrated.ConfigVersion)
+	if migrated.ConfigVersion != "v0.0.9" {
+		t.Errorf("config_version: got %s, want v0.0.9", migrated.ConfigVersion)
 	}
 
 	if migrated.UpstreamWifi.ScanIntervalSeconds != 300 {
@@ -98,8 +98,8 @@ func TestConfigMigration_v007_to_v008(t *testing.T) {
 	if err := json.Unmarshal(savedData, &saved); err != nil {
 		t.Fatalf("saved config is invalid JSON: %v", err)
 	}
-	if saved.ConfigVersion != "v0.0.8" {
-		t.Errorf("saved config_version: got %s, want v0.0.8", saved.ConfigVersion)
+	if saved.ConfigVersion != "v0.0.9" {
+		t.Errorf("saved config_version: got %s, want v0.0.9", saved.ConfigVersion)
 	}
 }
 

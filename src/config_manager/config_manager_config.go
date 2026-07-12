@@ -25,22 +25,48 @@ type Config struct {
 	UpstreamDetector       UpstreamDetectorConfig       `json:"upstream_detector"`
 	UpstreamSessionManager UpstreamSessionManagerConfig `json:"upstream_session_manager"`
 	UpstreamWifi           UpstreamWifiConfig           `json:"upstream_wifi"`
+	MPTCPBonding           MPTCPBondingConfig           `json:"mptcp_bonding,omitempty"`
+}
+
+// MPTCPBondingConfig holds configuration for the optional MPTCP multi-WAN
+// bonding feature. When enabled, all client traffic is transparent-proxied
+// through a Shadowsocks server over MPTCP, aggregating bandwidth across
+// multiple WAN interfaces.
+type MPTCPBondingConfig struct {
+	Enabled          bool                   `json:"enabled"`
+	Server           MPTCPServerConfig      `json:"server"`
+	Interfaces       []MPTCPInterfaceConfig `json:"interfaces"`
+	MaxSubflows      int                    `json:"max_subflows"`
+	FallbackToNormal bool                   `json:"fallback_to_normal"`
+}
+
+type MPTCPServerConfig struct {
+	Host                string `json:"host"`
+	Port                int    `json:"port"`
+	ShadowsocksPassword string `json:"shadowsocks_password"`
+	ShadowsocksMethod   string `json:"shadowsocks_method"`
+	LocalProxyPort      int    `json:"local_proxy_port"`
+}
+
+type MPTCPInterfaceConfig struct {
+	Name     string `json:"name"`
+	Priority int    `json:"priority"`
 }
 
 type UpstreamWifiConfig struct {
-	ScanIntervalSeconds     int `json:"scan_interval_seconds"`
-	FastCheckSeconds        int `json:"fast_check_seconds"`
-	LostThreshold           int `json:"lost_threshold"`
-	HysteresisDB            int `json:"hysteresis_db"`
-	SignalFloor             int `json:"signal_floor"`
-	BlacklistTTLMinutes     int `json:"blacklist_ttl_minutes"`
-	EmergencyPenalty        int `json:"emergency_penalty"`
-	MaxConsecutiveFailures  int `json:"max_consecutive_failures"`
-	SwitchCooldownMinutes   int `json:"switch_cooldown_minutes"`
-	StartupGraceSeconds     int `json:"startup_grace_seconds"`
-	PostSwitchWaitSeconds   int `json:"post_switch_wait_seconds"`
-	DHCPTimeoutSeconds      int `json:"dhcp_timeout_seconds"`
-	ManualPauseSeconds      int `json:"manual_pause_seconds"`
+	ScanIntervalSeconds    int `json:"scan_interval_seconds"`
+	FastCheckSeconds       int `json:"fast_check_seconds"`
+	LostThreshold          int `json:"lost_threshold"`
+	HysteresisDB           int `json:"hysteresis_db"`
+	SignalFloor            int `json:"signal_floor"`
+	BlacklistTTLMinutes    int `json:"blacklist_ttl_minutes"`
+	EmergencyPenalty       int `json:"emergency_penalty"`
+	MaxConsecutiveFailures int `json:"max_consecutive_failures"`
+	SwitchCooldownMinutes  int `json:"switch_cooldown_minutes"`
+	StartupGraceSeconds    int `json:"startup_grace_seconds"`
+	PostSwitchWaitSeconds  int `json:"post_switch_wait_seconds"`
+	DHCPTimeoutSeconds     int `json:"dhcp_timeout_seconds"`
+	ManualPauseSeconds     int `json:"manual_pause_seconds"`
 }
 
 // MintConfig holds configuration for a specific mint.
@@ -217,7 +243,7 @@ func NewDefaultConfig() *Config {
 	}
 
 	return &Config{
-		ConfigVersion: "v0.0.8",
+		ConfigVersion: "v0.0.9",
 		LogLevel:      "info",
 		AcceptedMints: mints,
 		ProfitShare: []ProfitShareConfig{
@@ -285,6 +311,16 @@ func NewDefaultConfig() *Config {
 			DHCPTimeoutSeconds:     180,
 			ManualPauseSeconds:     120,
 		},
+		MPTCPBonding: MPTCPBondingConfig{
+			Enabled:          false, // opt-in
+			MaxSubflows:      2,
+			FallbackToNormal: true,
+			Server: MPTCPServerConfig{
+				Port:              65101,
+				ShadowsocksMethod: "chacha20-ietf-poly1305",
+				LocalProxyPort:    1080,
+			},
+		},
 	}
 }
 
@@ -336,6 +372,12 @@ func migrateConfig(config *Config, defaults *Config) {
 	if config.UpstreamWifi.ScanIntervalSeconds == 0 {
 		config.UpstreamWifi = defaults.UpstreamWifi
 		log.Printf("INFO: Populated UpstreamWifi defaults (was missing in v%s)", config.ConfigVersion)
+	}
+	// MPTCP bonding defaults — populated for configs created before the feature existed.
+	// Detect "missing" by checking if MaxSubflows is zero (no user would set it to 0).
+	if config.MPTCPBonding.MaxSubflows == 0 {
+		config.MPTCPBonding = defaults.MPTCPBonding
+		log.Printf("INFO: Populated MPTCPBonding defaults (was missing in v%s)", config.ConfigVersion)
 	}
 	config.ConfigVersion = defaults.ConfigVersion
 }
